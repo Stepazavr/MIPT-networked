@@ -1,6 +1,6 @@
 [submodule "3rdParty/raylib"]
 	path = 3rdParty/raylib
-	url = git@github.com:raysan5/raylib.git
+	url = https://github.com/raysan5/raylib.git
 [submodule "3rdParty/enet"]
 	path = 3rdParty/enet
-	url = git@github.com:lsalzman/enet.git
+	url = https://github.com/lsalzman/enet.git

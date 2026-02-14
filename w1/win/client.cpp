@@ -31,14 +31,36 @@ int sfd;
 
 void receive_messages()
 {
-	int message_num = -1;
+	constexpr size_t buf_size = 1000;
+	char buffer[buf_size];
+
 	while (running)
 	{
-		message_num = (message_num + 1) % messages.size();
-		std::cout << "\rRick: " << messages[message_num] << "\n";
-		std::cout << "> " << buffered_msg << std::flush;
+		fd_set read_set;
+		FD_ZERO(&read_set);
+		FD_SET((SOCKET)sfd, &read_set);
+		timeval timeout = {0, 100000}; // 100 ms
+		select((int)sfd + 1, &read_set, NULL, NULL, &timeout);
 
-		std::this_thread::sleep_for(std::chrono::seconds(5));
+		if (!FD_ISSET((SOCKET)sfd, &read_set))
+			continue;
+
+		memset(buffer, 0, buf_size);
+		sockaddr_in socket_in;
+		int socket_len = sizeof(sockaddr_in);
+		int num_bytes = recvfrom((SOCKET)sfd, buffer, buf_size - 1, 0, (sockaddr*)&socket_in, &socket_len);
+		if (num_bytes <= 0)
+			continue;
+
+		if (std::string(buffer) == "PING")
+		{
+			const char* pong_msg = "PONG";
+			sendto(sfd, pong_msg, (int)strlen(pong_msg), 0, addr_info.ai_addr, addr_info.ai_addrlen);
+			continue;
+		}
+
+		std::cout << "\rServer: " << buffer << "\n";
+		std::cout << "> " << buffered_msg << std::flush;
 	}
 }
 
@@ -66,6 +88,7 @@ void handle_input()
 	{
 		if (buffered_msg == "/quit")
 		{
+			sendto(sfd, buffered_msg.c_str(), buffered_msg.size(), 0, addr_info.ai_addr, addr_info.ai_addrlen);
 			running = false;
 			std::cout << "\nExiting...\n";
 		}
