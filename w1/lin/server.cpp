@@ -9,8 +9,8 @@ const char* port = "2026";
 int main(int argc, const char** argv)
 {
 
-	int socketFd = create_server(port);
-	if (socketFd == -1)
+	int sfd = create_server(port);
+	if (sfd == -1)
 	{
 		std::cout << "Failed to create a socket\n";
 		return 1;
@@ -20,24 +20,24 @@ int main(int argc, const char** argv)
 
 	while (true)
 	{
-		fd_set readSet;
-		FD_ZERO(&readSet);
-		FD_SET(socketFd, &readSet);
+		fd_set read_set;
+		FD_ZERO(&read_set);
+		FD_SET(sfd, &read_set);
 		timeval timeout = {0, 100000}; // 100 ms
-		select(socketFd + 1, &readSet, NULL, NULL, &timeout);
+		select(sfd + 1, &read_set, NULL, NULL, &timeout);
 
-		if (FD_ISSET(socketFd, &readSet))
+		if (FD_ISSET(sfd, &read_set))
 		{
-			constexpr size_t bufSize = 1000;
-			static char buffer[bufSize];
-			memset(buffer, 0, bufSize);
+			constexpr size_t buf_size = 1000;
+			static char buffer[buf_size];
+			memset(buffer, 0, buf_size);
 
-			sockaddr_in socketIn;
-			socklen_t socketLen = sizeof(sockaddr_in);
-			ssize_t numBytes = recvfrom(socketFd, buffer, bufSize - 1, 0, (sockaddr*)&socketIn, &socketLen);
-			if (numBytes > 0)
+			sockaddr_in socket_in;
+			socklen_t socket_len = sizeof(sockaddr_in);
+			ssize_t num_bytes = recvfrom(sfd, buffer, buf_size - 1, 0, (sockaddr*)&socket_in, &socket_len);
+			if (num_bytes > 0)
 			{
-				std::cout << "(" << inet_ntoa(socketIn.sin_addr) << ":" << socketIn.sin_port << "): " << buffer
+				std::cout << "(" << inet_ntoa(socket_in.sin_addr) << ":" << socket_in.sin_port << "): " << buffer
 						  << std::endl;
 			}
 		}
