@@ -172,6 +172,16 @@ void MessageManager::HandleMessage(
 			break;
 		case Command::Answer:
 		{
+			auto clientIt = clients.find(endpoint);
+			if (clientIt == clients.end())
+				break;
+
+			if (!duelManager.IsPlayerInDuel(endpoint))
+			{
+				SendMessage(clientIt->second.addr, "[DUEL] You are not in a duel.");
+				break;
+			}
+
 			ParsedMessage parsedMessage = ParseMessage(msg);
 			if (std::holds_alternative<int>(parsedMessage.data))
 			{
@@ -179,9 +189,7 @@ void MessageManager::HandleMessage(
 			}
 			else
 			{
-				auto clientIt = clients.find(endpoint);
-				if (clientIt != clients.end())
-					SendMessage(clientIt->second.addr, "[DUEL] Invalid answer format.");
+				SendMessage(clientIt->second.addr, "[DUEL] Invalid answer format.");
 			}
 			break;
 		}

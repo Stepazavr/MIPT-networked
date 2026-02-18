@@ -125,6 +125,9 @@ int main(int argc, const char** argv)
 		return 1;
 	}
 
+	const char* readyMsg = "READY";
+	sendto(sfd, readyMsg, (int)strlen(readyMsg), 0, addr_info.ai_addr, addr_info.ai_addrlen);
+
 	std::cout << "ChatClient - Type '/quit' to exit\n"
 			  << "> ";
 

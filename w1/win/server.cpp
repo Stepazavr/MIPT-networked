@@ -41,8 +41,8 @@ void touch_client(const std::string& endpoint, const sockaddr_in& addr, std::chr
 	it->second.addr = addr;
 }
 
-const auto disconnectTimeout = std::chrono::seconds(6);
-const auto pingInterval = std::chrono::seconds(2);
+const auto disconnectTimeout = std::chrono::seconds(30);
+const auto pingInterval = std::chrono::seconds(5);
 
 void sendPings(std::chrono::steady_clock::time_point now, std::chrono::steady_clock::time_point& lastPing,
 	std::chrono::steady_clock::duration pingInterval)

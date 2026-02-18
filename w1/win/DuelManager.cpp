@@ -77,6 +77,11 @@ void DuelManager::HandleDuelRequest(const std::string& endpoint)
 	pendingDuel = duels.end();
 }
 
+bool DuelManager::IsPlayerInDuel(const std::string& endpoint) const
+{
+	return duelByClient.find(endpoint) != duelByClient.end();
+}
+
 void DuelManager::HandleDuelAnswer(const std::string& endpoint, int answerValue)
 {
 	auto it = duelByClient.find(endpoint);

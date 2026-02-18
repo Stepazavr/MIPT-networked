@@ -23,6 +23,7 @@ public:
 	void HandleDuelRequest(const std::string& endpoint);
 	void HandleDuelAnswer(const std::string& endpoint, int answerValue);
 	void CleanupDuelByPlayer(const std::string& endpoint, std::string& opponent);
+	bool IsPlayerInDuel(const std::string& endpoint) const;
 
 private:
 	void GenerateDuelTask(std::string& task, int& answer) const;
