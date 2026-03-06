@@ -1,9 +1,11 @@
 #include "MessageManager.h"
 
 #include <cctype>
+#include <chrono>
 #include <cstring>
 #include <iostream>
 #include <variant>
+#include <vector>
 #include <winsock2.h>
 
 #include "Common.h"
@@ -12,6 +14,16 @@
 extern std::unordered_map<std::string, ClientInfo> clients;
 extern int sfd;
 extern DuelManager duelManager;
+
+namespace
+{
+	std::string MakeEndpointFromAddr(const sockaddr_in& addr)
+	{
+		std::string ip = inet_ntoa(addr.sin_addr);
+		unsigned short hostPort = ntohs(addr.sin_port);
+		return ip + ":" + std::to_string(hostPort);
+	}
+} // namespace
 
 std::string MessageManager::ExtractPrefixedPayload(const std::string& msg, const std::string& prefix) const
 {
@@ -135,9 +147,70 @@ ParsedMessage MessageManager::ParseMessage(const std::string& msg) const
 	return result;
 }
 
-void MessageManager::SendMessage(const sockaddr_in& addr, const std::string& msg) const
+void MessageManager::SendRawMessage(const sockaddr_in& addr, const std::string& msg) const
 {
 	sendto((SOCKET)sfd, msg.c_str(), (int)msg.size(), 0, (sockaddr*)&addr, sizeof(sockaddr_in));
+}
+
+void MessageManager::SendAck(const sockaddr_in& addr, std::uint64_t packetId) const
+{
+	std::string ack = BuildAckPacket(packetId);
+	SendRawMessage(addr, ack);
+}
+
+void MessageManager::SendReliableMessage(const std::string& endpoint, const sockaddr_in& addr, const std::string& msg)
+{
+	std::uint64_t packetId = nextPacketId++;
+	std::string packet = BuildMessagePacket(packetId, msg);
+	SendRawMessage(addr, packet);
+	pendingPackets[packetId] = PendingReliablePacket{addr, endpoint, packet, std::chrono::steady_clock::now(), 0};
+}
+
+void MessageManager::SendMessage(const sockaddr_in& addr, const std::string& msg)
+{
+	SendReliableMessage(MakeEndpointFromAddr(addr), addr, msg);
+}
+
+void MessageManager::HandleIncomingAck(const std::string& endpoint, std::uint64_t packetId)
+{
+	auto it = pendingPackets.find(packetId);
+	if (it == pendingPackets.end())
+		return;
+
+	if (it->second.endpoint != endpoint)
+		return;
+
+	pendingPackets.erase(it);
+}
+
+void MessageManager::ProcessReliableRetries(std::chrono::steady_clock::time_point now)
+{
+	std::vector<std::uint64_t> toDrop;
+	for (auto& entry : pendingPackets)
+	{
+		PendingReliablePacket& pending = entry.second;
+		if (now - pending.lastSend < ackTimeout)
+			continue;
+
+		if (pending.retries >= maxRetries)
+		{
+			std::cout << "[NET][LOSS] no ACK from " << pending.endpoint << " for packet " << entry.first
+					  << ", drop after " << maxRetries << " retries" << std::endl;
+			toDrop.push_back(entry.first);
+			continue;
+		}
+
+		SendRawMessage(pending.addr, pending.packet);
+		pending.lastSend = now;
+		++pending.retries;
+		std::cout << "[NET][LOSS] retry packet " << entry.first << " to " << pending.endpoint << " (attempt "
+				  << pending.retries << ")" << std::endl;
+	}
+
+	for (std::uint64_t packetId : toDrop)
+	{
+		pendingPackets.erase(packetId);
+	}
 }
 
 void MessageManager::HandleMessage(

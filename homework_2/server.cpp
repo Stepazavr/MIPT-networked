@@ -53,7 +53,7 @@ void sendPings(std::chrono::steady_clock::time_point now, std::chrono::steady_cl
 	for (auto& entry : clients)
 	{
 		const char* pingMsg = "PING";
-		messageManager.SendMessage(entry.second.addr, pingMsg);
+		messageManager.SendRawMessage(entry.second.addr, pingMsg);
 	}
 	lastPing = now;
 }
@@ -127,13 +127,36 @@ int main(int argc, const char** argv)
 			{
 				std::string endpoint = make_endpoint(socketIn);
 				auto now = std::chrono::steady_clock::now();
+				std::string rawMessage(buffer, buffer + numBytes);
+				TransportPacket packet;
 
 				touch_client(endpoint, socketIn, now);
-				messageManager.HandleMessage(endpoint, std::string(buffer), now);
+
+				if (!ParseTransportPacket(rawMessage, packet))
+				{
+					std::cout << "[NET] malformed packet from " << endpoint << std::endl;
+					continue;
+				}
+
+				if (packet.type == TransportPacketType::Ack)
+				{
+					messageManager.HandleIncomingAck(endpoint, packet.id);
+					continue;
+				}
+
+				if (packet.type == TransportPacketType::Message)
+				{
+					messageManager.SendAck(socketIn, packet.id);
+					messageManager.HandleMessage(endpoint, packet.payload, now);
+					continue;
+				}
+
+				messageManager.HandleMessage(endpoint, packet.payload, now);
 			}
 		}
 
 		auto now = std::chrono::steady_clock::now();
+		messageManager.ProcessReliableRetries(now);
 		sendPings(now, lastPing, pingInterval);
 		handleTimeouts(now, disconnectTimeout);
 	}

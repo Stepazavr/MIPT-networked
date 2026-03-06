@@ -1,13 +1,18 @@
 #include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
+#include "Common.h"
 #include "socket_tools.h"
 
 std::atomic<bool> running{true};
@@ -29,6 +34,70 @@ const char* port = "2026";
 addrinfo addr_info;
 int sfd;
 
+struct PendingPacket
+{
+	std::string packet;
+	std::chrono::steady_clock::time_point lastSend;
+	int retries = 0;
+};
+
+std::atomic<std::uint64_t> nextPacketId{1};
+std::unordered_map<std::uint64_t, PendingPacket> pendingPackets;
+std::mutex pendingMutex;
+
+constexpr std::chrono::milliseconds ackTimeout{700};
+constexpr int maxRetries = 5;
+
+void send_raw(const std::string& msg)
+{
+	sendto(sfd, msg.c_str(), (int)msg.size(), 0, addr_info.ai_addr, addr_info.ai_addrlen);
+}
+
+void send_ack(std::uint64_t packetId)
+{
+	send_raw(BuildAckPacket(packetId));
+}
+
+void send_reliable(const std::string& payload)
+{
+	std::uint64_t packetId = nextPacketId.fetch_add(1);
+	std::string packet = BuildMessagePacket(packetId, payload);
+	send_raw(packet);
+
+	std::lock_guard<std::mutex> lock(pendingMutex);
+	pendingPackets[packetId] = PendingPacket{packet, std::chrono::steady_clock::now(), 0};
+}
+
+void process_pending_retries()
+{
+	auto now = std::chrono::steady_clock::now();
+	std::vector<std::uint64_t> toDrop;
+
+	std::lock_guard<std::mutex> lock(pendingMutex);
+	for (auto& entry : pendingPackets)
+	{
+		PendingPacket& pending = entry.second;
+		if (now - pending.lastSend < ackTimeout)
+			continue;
+
+		if (pending.retries >= maxRetries)
+		{
+			std::cout << "\n[NET] delivery failed for packet " << entry.first << std::endl;
+			toDrop.push_back(entry.first);
+			continue;
+		}
+
+		send_raw(pending.packet);
+		pending.lastSend = now;
+		++pending.retries;
+	}
+
+	for (std::uint64_t packetId : toDrop)
+	{
+		pendingPackets.erase(packetId);
+	}
+}
+
 void receive_messages()
 {
 	constexpr size_t buf_size = 1000;
@@ -36,6 +105,8 @@ void receive_messages()
 
 	while (running)
 	{
+		process_pending_retries();
+
 		fd_set read_set;
 		FD_ZERO(&read_set);
 		FD_SET((SOCKET)sfd, &read_set);
@@ -52,14 +123,37 @@ void receive_messages()
 		if (num_bytes <= 0)
 			continue;
 
-		if (std::string(buffer) == "PING")
+		std::string raw(buffer, buffer + num_bytes);
+		TransportPacket packet;
+		if (!ParseTransportPacket(raw, packet))
+			continue;
+
+		if (packet.type == TransportPacketType::Ack)
 		{
-			const char* pong_msg = "PONG";
-			sendto(sfd, pong_msg, (int)strlen(pong_msg), 0, addr_info.ai_addr, addr_info.ai_addrlen);
+			std::lock_guard<std::mutex> lock(pendingMutex);
+			pendingPackets.erase(packet.id);
 			continue;
 		}
 
-		std::cout << "\rServer: " << buffer << "\n";
+		std::string payload;
+		if (packet.type == TransportPacketType::Message)
+		{
+			send_ack(packet.id);
+			payload = packet.payload;
+		}
+		else
+		{
+			payload = packet.payload;
+		}
+
+		if (payload == "PING")
+		{
+			const char* pong_msg = "PONG";
+			send_raw(pong_msg);
+			continue;
+		}
+
+		std::cout << "\rServer: " << payload << "\n";
 		std::cout << "> " << buffered_msg << std::flush;
 	}
 }
@@ -88,20 +182,14 @@ void handle_input()
 	{
 		if (buffered_msg == "/quit")
 		{
-			sendto(sfd, buffered_msg.c_str(), buffered_msg.size(), 0, addr_info.ai_addr, addr_info.ai_addrlen);
+			send_reliable(buffered_msg);
 			running = false;
 			std::cout << "\nExiting...\n";
 		}
 		else if (!buffered_msg.empty())
 		{
 			std::cout << "\rYou sent: " << buffered_msg << "\n";
-			int res =
-				sendto(sfd, buffered_msg.c_str(), buffered_msg.size(), 0, addr_info.ai_addr, addr_info.ai_addrlen);
-			if (res == SOCKET_ERROR)
-			{
-				int err = WSAGetLastError();
-				std::cout << "Error: " << err << std::endl;
-			}
+			send_reliable(buffered_msg);
 
 			buffered_msg.clear();
 			std::cout << "> " << std::flush;
@@ -126,7 +214,7 @@ int main(int argc, const char** argv)
 	}
 
 	const char* readyMsg = "READY";
-	sendto(sfd, readyMsg, (int)strlen(readyMsg), 0, addr_info.ai_addr, addr_info.ai_addrlen);
+	send_raw(readyMsg);
 
 	std::cout << "ChatClient - Type '/quit' to exit\n"
 			  << "> ";
