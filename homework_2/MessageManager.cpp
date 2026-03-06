@@ -4,26 +4,92 @@
 #include <chrono>
 #include <cstring>
 #include <iostream>
+#include <mutex>
 #include <variant>
 #include <vector>
 #include <winsock2.h>
 
 #include "Common.h"
-#include "DuelManager.h"
 
-extern std::unordered_map<std::string, ClientInfo> clients;
-extern int sfd;
-extern DuelManager duelManager;
-
-namespace
+MessageManager::MessageManager(int socketFdValue)
+	: socketFd(socketFdValue)
 {
-	std::string MakeEndpointFromAddr(const sockaddr_in& addr)
+}
+
+void MessageManager::SetSocket(int socketFdValue)
+{
+	socketFd = socketFdValue;
+}
+
+std::string MessageManager::MakeEndpoint(const sockaddr_in& addr)
+{
+	std::string ip = inet_ntoa(addr.sin_addr);
+	unsigned short hostPort = ntohs(addr.sin_port);
+	return ip + ":" + std::to_string(hostPort);
+}
+
+bool MessageManager::ParseTransportPacket(const std::string& raw, TransportPacket& out) const
+{
+	if (raw.rfind("ACK|", 0) == 0)
 	{
-		std::string ip = inet_ntoa(addr.sin_addr);
-		unsigned short hostPort = ntohs(addr.sin_port);
-		return ip + ":" + std::to_string(hostPort);
+		std::string idPart = raw.substr(4);
+		if (idPart.empty())
+			return false;
+
+		try
+		{
+			out.id = std::stoull(idPart);
+		}
+		catch (...)
+		{
+			return false;
+		}
+
+		out.type = TransportPacketType::Ack;
+		out.payload.clear();
+		return true;
 	}
-} // namespace
+
+	if (raw.rfind("MSG|", 0) == 0)
+	{
+		size_t idStart = 4;
+		size_t idEnd = raw.find('|', idStart);
+		if (idEnd == std::string::npos)
+			return false;
+
+		std::string idPart = raw.substr(idStart, idEnd - idStart);
+		if (idPart.empty())
+			return false;
+
+		try
+		{
+			out.id = std::stoull(idPart);
+		}
+		catch (...)
+		{
+			return false;
+		}
+
+		out.type = TransportPacketType::Message;
+		out.payload = raw.substr(idEnd + 1);
+		return true;
+	}
+
+	out.type = TransportPacketType::Raw;
+	out.id = 0;
+	out.payload = raw;
+	return true;
+}
+
+std::string MessageManager::BuildMessagePacket(std::uint64_t id, const std::string& payload)
+{
+	return "MSG|" + std::to_string(id) + "|" + payload;
+}
+
+std::string MessageManager::BuildAckPacket(std::uint64_t id)
+{
+	return "ACK|" + std::to_string(id);
+}
 
 std::string MessageManager::ExtractPrefixedPayload(const std::string& msg, const std::string& prefix) const
 {
@@ -149,7 +215,10 @@ ParsedMessage MessageManager::ParseMessage(const std::string& msg) const
 
 void MessageManager::SendRawMessage(const sockaddr_in& addr, const std::string& msg) const
 {
-	sendto((SOCKET)sfd, msg.c_str(), (int)msg.size(), 0, (sockaddr*)&addr, sizeof(sockaddr_in));
+	if (socketFd < 0)
+		return;
+
+	sendto((SOCKET)socketFd, msg.c_str(), (int)msg.size(), 0, (sockaddr*)&addr, sizeof(sockaddr_in));
 }
 
 void MessageManager::SendAck(const sockaddr_in& addr, std::uint64_t packetId) const
@@ -158,21 +227,23 @@ void MessageManager::SendAck(const sockaddr_in& addr, std::uint64_t packetId) co
 	SendRawMessage(addr, ack);
 }
 
-void MessageManager::SendReliableMessage(const std::string& endpoint, const sockaddr_in& addr, const std::string& msg)
+void MessageManager::SendReliableInternal(const std::string& endpoint, const sockaddr_in& addr, const std::string& msg)
 {
+	std::lock_guard<std::mutex> lock(pendingMutex);
 	std::uint64_t packetId = nextPacketId++;
 	std::string packet = BuildMessagePacket(packetId, msg);
 	SendRawMessage(addr, packet);
 	pendingPackets[packetId] = PendingReliablePacket{addr, endpoint, packet, std::chrono::steady_clock::now(), 0};
 }
 
-void MessageManager::SendMessage(const sockaddr_in& addr, const std::string& msg)
+void MessageManager::SendReliable(const sockaddr_in& addr, const std::string& msg)
 {
-	SendReliableMessage(MakeEndpointFromAddr(addr), addr, msg);
+	SendReliableInternal(MakeEndpoint(addr), addr, msg);
 }
 
 void MessageManager::HandleIncomingAck(const std::string& endpoint, std::uint64_t packetId)
 {
+	std::lock_guard<std::mutex> lock(pendingMutex);
 	auto it = pendingPackets.find(packetId);
 	if (it == pendingPackets.end())
 		return;
@@ -185,6 +256,7 @@ void MessageManager::HandleIncomingAck(const std::string& endpoint, std::uint64_
 
 void MessageManager::ProcessReliableRetries(std::chrono::steady_clock::time_point now)
 {
+	std::lock_guard<std::mutex> lock(pendingMutex);
 	std::vector<std::uint64_t> toDrop;
 	for (auto& entry : pendingPackets)
 	{
@@ -210,111 +282,5 @@ void MessageManager::ProcessReliableRetries(std::chrono::steady_clock::time_poin
 	for (std::uint64_t packetId : toDrop)
 	{
 		pendingPackets.erase(packetId);
-	}
-}
-
-void MessageManager::HandleMessage(
-	const std::string& endpoint, const std::string& msg, std::chrono::steady_clock::time_point now)
-{
-	switch (ParseCommand(msg))
-	{
-		case Command::Pong:
-		{
-			auto pongIt = clients.find(endpoint);
-			if (pongIt != clients.end())
-				pongIt->second.lastPong = now;
-			break;
-		}
-		case Command::Quit:
-			std::cout << "Disconnected: " << endpoint << std::endl;
-			{
-				std::string opponent;
-				duelManager.CleanupDuelByPlayer(endpoint, opponent);
-				if (!opponent.empty())
-				{
-					std::string winMsg = opponent + " is the winner! (Opponent disconnected)";
-					auto it = clients.find(opponent);
-					if (it != clients.end())
-						SendMessage(it->second.addr, winMsg);
-				}
-			}
-			clients.erase(endpoint);
-			break;
-		case Command::Duel:
-			duelManager.HandleDuelRequest(endpoint);
-			break;
-		case Command::Answer:
-		{
-			auto clientIt = clients.find(endpoint);
-			if (clientIt == clients.end())
-				break;
-
-			if (!duelManager.IsPlayerInDuel(endpoint))
-			{
-				SendMessage(clientIt->second.addr, "[DUEL] You are not in a duel.");
-				break;
-			}
-
-			ParsedMessage parsedMessage = ParseMessage(msg);
-			if (std::holds_alternative<int>(parsedMessage.data))
-			{
-				duelManager.HandleDuelAnswer(endpoint, std::get<int>(parsedMessage.data));
-			}
-			else
-			{
-				SendMessage(clientIt->second.addr, "[DUEL] Invalid answer format.");
-			}
-			break;
-		}
-		case Command::Whisper:
-		{
-			ParsedMessage parsedMessage = ParseMessage(msg);
-			if (std::holds_alternative<WhisperData>(parsedMessage.data))
-			{
-				WhisperData whisperData = std::get<WhisperData>(parsedMessage.data);
-				ClientInfo* target = nullptr;
-				for (auto& entry : clients)
-				{
-					if (ntohs(entry.second.addr.sin_port) == whisperData.port)
-					{
-						target = &entry.second;
-						break;
-					}
-				}
-
-				auto senderIt = clients.find(endpoint);
-				if (target && senderIt != clients.end())
-				{
-					std::string out = "[W] " + endpoint + ": " + whisperData.text;
-					SendMessage(target->addr, out);
-				}
-				else if (senderIt != clients.end())
-				{
-					std::string out = "[ERROR] Client with port " + std::to_string(whisperData.port) + " not found";
-					SendMessage(senderIt->second.addr, out);
-				}
-			}
-			break;
-		}
-		case Command::All:
-		{
-			ParsedMessage parsedMessage = ParseMessage(msg);
-			if (std::holds_alternative<std::string>(parsedMessage.data))
-			{
-				std::string payload = std::get<std::string>(parsedMessage.data);
-				std::string out = "[ALL] " + endpoint + ": " + payload;
-				for (auto& entry : clients)
-				{
-					if (entry.first == endpoint)
-						continue;
-					SendMessage(entry.second.addr, out);
-				}
-			}
-			break;
-		}
-		case Command::None:
-		default:
-			std::cout << "(" << endpoint << "): " << msg << std::endl;
-			break;
 	}
 }

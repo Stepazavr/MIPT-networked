@@ -21,13 +21,6 @@ int sfd = -1;
 DuelManager duelManager;
 MessageManager messageManager;
 
-std::string make_endpoint(const sockaddr_in& addr)
-{
-	std::string ip = inet_ntoa(addr.sin_addr);
-	unsigned short hostPort = ntohs(addr.sin_port);
-	return ip + ":" + std::to_string(hostPort);
-}
-
 void touch_client(const std::string& endpoint, const sockaddr_in& addr, std::chrono::steady_clock::time_point now)
 {
 	auto it = clients.find(endpoint);
@@ -79,9 +72,114 @@ void handleTimeouts(std::chrono::steady_clock::time_point now, std::chrono::stea
 			std::string winMsg = opponent + " is the winner! (Opponent disconnected)";
 			auto it = clients.find(opponent);
 			if (it != clients.end())
-				messageManager.SendMessage(it->second.addr, winMsg);
+				messageManager.SendReliable(it->second.addr, winMsg);
 		}
 		clients.erase(endpoint);
+	}
+}
+
+void handleClientMessage(const std::string& endpoint, const std::string& msg, std::chrono::steady_clock::time_point now)
+{
+	switch (messageManager.ParseCommand(msg))
+	{
+		case Command::Pong:
+		{
+			auto pongIt = clients.find(endpoint);
+			if (pongIt != clients.end())
+				pongIt->second.lastPong = now;
+			break;
+		}
+		case Command::Quit:
+			std::cout << "Disconnected: " << endpoint << std::endl;
+			{
+				std::string opponent;
+				duelManager.CleanupDuelByPlayer(endpoint, opponent);
+				if (!opponent.empty())
+				{
+					std::string winMsg = opponent + " is the winner! (Opponent disconnected)";
+					auto it = clients.find(opponent);
+					if (it != clients.end())
+						messageManager.SendReliable(it->second.addr, winMsg);
+				}
+			}
+			clients.erase(endpoint);
+			break;
+		case Command::Duel:
+			duelManager.HandleDuelRequest(endpoint);
+			break;
+		case Command::Answer:
+		{
+			auto clientIt = clients.find(endpoint);
+			if (clientIt == clients.end())
+				break;
+
+			if (!duelManager.IsPlayerInDuel(endpoint))
+			{
+				messageManager.SendReliable(clientIt->second.addr, "[DUEL] You are not in a duel.");
+				break;
+			}
+
+			ParsedMessage parsedMessage = messageManager.ParseMessage(msg);
+			if (std::holds_alternative<int>(parsedMessage.data))
+			{
+				duelManager.HandleDuelAnswer(endpoint, std::get<int>(parsedMessage.data));
+			}
+			else
+			{
+				messageManager.SendReliable(clientIt->second.addr, "[DUEL] Invalid answer format.");
+			}
+			break;
+		}
+		case Command::Whisper:
+		{
+			ParsedMessage parsedMessage = messageManager.ParseMessage(msg);
+			if (std::holds_alternative<WhisperData>(parsedMessage.data))
+			{
+				WhisperData whisperData = std::get<WhisperData>(parsedMessage.data);
+				ClientInfo* target = nullptr;
+				for (auto& entry : clients)
+				{
+					if (ntohs(entry.second.addr.sin_port) == whisperData.port)
+					{
+						target = &entry.second;
+						break;
+					}
+				}
+
+				auto senderIt = clients.find(endpoint);
+				if (target && senderIt != clients.end())
+				{
+					std::string out = "[W] " + endpoint + ": " + whisperData.text;
+					messageManager.SendReliable(target->addr, out);
+				}
+				else if (senderIt != clients.end())
+				{
+					std::string out = "[ERROR] Client with port " + std::to_string(whisperData.port) + " not found";
+					messageManager.SendReliable(senderIt->second.addr, out);
+				}
+			}
+			break;
+		}
+		case Command::All:
+		{
+			ParsedMessage parsedMessage = messageManager.ParseMessage(msg);
+			if (std::holds_alternative<std::string>(parsedMessage.data))
+			{
+				std::string payload = std::get<std::string>(parsedMessage.data);
+				std::string out = "[ALL] " + endpoint + ": " + payload;
+				for (auto& entry : clients)
+				{
+					if (entry.first == endpoint)
+						continue;
+					messageManager.SendReliable(entry.second.addr, out);
+				}
+			}
+			break;
+		}
+		case Command::None:
+		default:
+			std::cout << "(" << endpoint << "): " << msg << std::endl;
+			break;
 	}
 }
 
@@ -101,6 +199,7 @@ int main(int argc, const char** argv)
 		return 1;
 	}
 	sfd = socket;
+	messageManager.SetSocket(sfd);
 
 	std::cout << "ChatServer - Listening!\n";
 
@@ -125,14 +224,14 @@ int main(int argc, const char** argv)
 			int numBytes = recvfrom((SOCKET)sfd, buffer, bufSize - 1, 0, (sockaddr*)&socketIn, &socketLen);
 			if (numBytes > 0)
 			{
-				std::string endpoint = make_endpoint(socketIn);
+				std::string endpoint = MessageManager::MakeEndpoint(socketIn);
 				auto now = std::chrono::steady_clock::now();
 				std::string rawMessage(buffer, buffer + numBytes);
 				TransportPacket packet;
 
 				touch_client(endpoint, socketIn, now);
 
-				if (!ParseTransportPacket(rawMessage, packet))
+				if (!messageManager.ParseTransportPacket(rawMessage, packet))
 				{
 					std::cout << "[NET] malformed packet from " << endpoint << std::endl;
 					continue;
@@ -147,11 +246,11 @@ int main(int argc, const char** argv)
 				if (packet.type == TransportPacketType::Message)
 				{
 					messageManager.SendAck(socketIn, packet.id);
-					messageManager.HandleMessage(endpoint, packet.payload, now);
+					handleClientMessage(endpoint, packet.payload, now);
 					continue;
 				}
 
-				messageManager.HandleMessage(endpoint, packet.payload, now);
+				handleClientMessage(endpoint, packet.payload, now);
 			}
 		}
 

@@ -43,7 +43,7 @@ void DuelManager::HandleDuelRequest(const std::string& endpoint)
 	{
 		auto it = clients.find(endpoint);
 		if (it != clients.end())
-			messageManager.SendMessage(it->second.addr, "[DUEL] You are already in a duel.");
+			messageManager.SendReliable(it->second.addr, "[DUEL] You are already in a duel.");
 		return;
 	}
 
@@ -57,7 +57,7 @@ void DuelManager::HandleDuelRequest(const std::string& endpoint)
 
 		auto it = clients.find(endpoint);
 		if (it != clients.end())
-			messageManager.SendMessage(it->second.addr, "[DUEL] Waiting for opponent...");
+			messageManager.SendReliable(it->second.addr, "[DUEL] Waiting for opponent...");
 		return;
 	}
 
@@ -69,10 +69,10 @@ void DuelManager::HandleDuelRequest(const std::string& endpoint)
 	std::string msg = "[DUEL] Task: " + duelIt->task + " ?";
 	auto itA = clients.find(duelIt->firstPlayer);
 	if (itA != clients.end())
-		messageManager.SendMessage(itA->second.addr, msg);
+		messageManager.SendReliable(itA->second.addr, msg);
 	auto itB = clients.find(duelIt->secondPlayer);
 	if (itB != clients.end())
-		messageManager.SendMessage(itB->second.addr, msg);
+		messageManager.SendReliable(itB->second.addr, msg);
 
 	pendingDuel = duels.end();
 }
@@ -89,7 +89,7 @@ void DuelManager::HandleDuelAnswer(const std::string& endpoint, int answerValue)
 	{
 		auto clientIt = clients.find(endpoint);
 		if (clientIt != clients.end())
-			messageManager.SendMessage(clientIt->second.addr, "[DUEL] You are not in a duel.");
+			messageManager.SendReliable(clientIt->second.addr, "[DUEL] You are not in a duel.");
 		return;
 	}
 
@@ -98,17 +98,17 @@ void DuelManager::HandleDuelAnswer(const std::string& endpoint, int answerValue)
 	{
 		auto clientIt = clients.find(endpoint);
 		if (clientIt != clients.end())
-			messageManager.SendMessage(clientIt->second.addr, "[DUEL] Wrong answer.");
+			messageManager.SendReliable(clientIt->second.addr, "[DUEL] Wrong answer.");
 		return;
 	}
 
 	std::string win = endpoint + " is the winner!";
 	auto itA = clients.find(duelIt->firstPlayer);
 	if (itA != clients.end())
-		messageManager.SendMessage(itA->second.addr, win);
+		messageManager.SendReliable(itA->second.addr, win);
 	auto itB = clients.find(duelIt->secondPlayer);
 	if (itB != clients.end())
-		messageManager.SendMessage(itB->second.addr, win);
+		messageManager.SendReliable(itB->second.addr, win);
 
 	CleanupDuel(duelIt);
 }
