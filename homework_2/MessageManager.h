@@ -25,6 +25,9 @@ public:
 	void SendReliable(const sockaddr_in& addr, const std::string& msg);
 	void SendRawMessage(const sockaddr_in& addr, const std::string& msg) const;
 	void SendAck(const sockaddr_in& addr, std::uint64_t packetId) const;
+	void SendOutOfOrderNotice(const sockaddr_in& addr, std::uint64_t gotId, std::uint64_t expectedId) const;
+	void SendOutOfOrderNoticeWithLogging(
+		const std::string& endpoint, const sockaddr_in& addr, std::uint64_t gotId, std::uint64_t expectedId) const;
 	bool HandleIncomingAck(const std::string& endpoint, std::uint64_t packetId);
 	int ProcessReliableRetries(std::chrono::steady_clock::time_point now);
 	int ProcessReliableRetriesWithLogging(std::chrono::steady_clock::time_point now);
@@ -67,6 +70,7 @@ private:
 	bool TryParseAnswer(const std::string& msg, int& value) const;
 	static std::string BuildMessagePacket(std::uint64_t id, const std::string& payload);
 	static std::string BuildAckPacket(std::uint64_t id);
+	static std::string BuildOutOfOrderPayload(std::uint64_t gotId, std::uint64_t expectedId);
 
 	int socketFd = -1;
 	std::unordered_map<std::string, EndpointOutgoingState> outgoingByEndpoint;

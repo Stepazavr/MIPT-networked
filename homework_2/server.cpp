@@ -22,6 +22,23 @@ DuelManager duelManager;
 MessageManager messageManager;
 const auto disconnectTimeout = std::chrono::seconds(30);
 
+void disconnectClient(const std::string& endpoint, const std::string& reason)
+{
+	std::cout << reason << endpoint << std::endl;
+	std::string opponent;
+	duelManager.CleanupDuelByPlayer(endpoint, opponent);
+	if (!opponent.empty())
+	{
+		std::string winMsg = opponent + " is the winner! (Opponent disconnected)";
+		auto it = clients.find(opponent);
+		if (it != clients.end())
+			messageManager.SendReliable(it->second.addr, winMsg);
+	}
+	clients.erase(endpoint);
+	messageManager.ClearIncomingMessageIdsForEndpoint(endpoint);
+	messageManager.ClearOutgoingQueueForEndpoint(endpoint);
+}
+
 void touch_client(const std::string& endpoint, const sockaddr_in& addr, std::chrono::steady_clock::time_point now)
 {
 	auto it = clients.find(endpoint);
@@ -48,19 +65,7 @@ void handleTimeouts(std::chrono::steady_clock::time_point now)
 
 	for (const auto& endpoint : toDisconnect)
 	{
-		std::cout << "Disconnected (no PING timeout): " << endpoint << std::endl;
-		std::string opponent;
-		duelManager.CleanupDuelByPlayer(endpoint, opponent);
-		if (!opponent.empty())
-		{
-			std::string winMsg = opponent + " is the winner! (Opponent disconnected)";
-			auto it = clients.find(opponent);
-			if (it != clients.end())
-				messageManager.SendReliable(it->second.addr, winMsg);
-		}
-		clients.erase(endpoint);
-		messageManager.ClearIncomingMessageIdsForEndpoint(endpoint);
-		messageManager.ClearOutgoingQueueForEndpoint(endpoint);
+		disconnectClient(endpoint, "Disconnected (no PING timeout): ");
 	}
 }
 
@@ -81,21 +86,7 @@ void handleClientMessage(const std::string& endpoint, const std::string& msg, st
 		case Command::Pong:
 			break;
 		case Command::Quit:
-			std::cout << "Disconnected: " << endpoint << std::endl;
-			{
-				std::string opponent;
-				duelManager.CleanupDuelByPlayer(endpoint, opponent);
-				if (!opponent.empty())
-				{
-					std::string winMsg = opponent + " is the winner! (Opponent disconnected)";
-					auto it = clients.find(opponent);
-					if (it != clients.end())
-						messageManager.SendReliable(it->second.addr, winMsg);
-				}
-			}
-			clients.erase(endpoint);
-			messageManager.ClearIncomingMessageIdsForEndpoint(endpoint);
-			messageManager.ClearOutgoingQueueForEndpoint(endpoint);
+			disconnectClient(endpoint, "Disconnected: ");
 			break;
 		case Command::Duel:
 			duelManager.HandleDuelRequest(endpoint);
@@ -248,11 +239,8 @@ int main(int argc, const char** argv)
 						long long expectedId = clientIt->second.lastReceivedMessageId + 1;
 						if ((long long)packet.id != expectedId)
 						{
-							std::string outOfOrder = "[NET][OUT_OF_ORDER] got=" + std::to_string(packet.id) +
-													 " expected=" + std::to_string(expectedId);
-							std::cout << "[NET][OUT_OF_ORDER] from " << endpoint << " got=" << packet.id
-									  << " expected=" << expectedId << std::endl;
-							messageManager.SendRawMessage(socketIn, outOfOrder);
+							messageManager.SendOutOfOrderNoticeWithLogging(
+								endpoint, socketIn, packet.id, (std::uint64_t)expectedId);
 							continue;
 						}
 

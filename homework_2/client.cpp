@@ -15,18 +15,6 @@
 std::atomic<bool> running{true};
 
 std::string buffered_msg;
-// clang-format off
-std::vector<std::string> messages = {
-    "https://youtu.be/dQw4w9WgXcQ?si=Ox1lQULEyKpisqd",
-    "Never gonna give you up",
-    "Never gonna let you down",
-    "Never gonna run around and desert you",
-    "Never gonna make you cry",
-    "Never gonna say goodbye",
-    "Never gonna tell a lie and hurt you",
-    "..."};
-// clang-format on
-
 const char* port = "2026";
 addrinfo addr_info;
 int sfd;
@@ -143,9 +131,7 @@ void receive_messages()
 			long long expectedId = lastReceivedServerMessageId.load() + 1;
 			if ((long long)packet.id != expectedId)
 			{
-				std::string outOfOrder =
-					"[NET][OUT_OF_ORDER] got=" + std::to_string(packet.id) + " expected=" + std::to_string(expectedId);
-				messageManager.SendRawMessage(socket_in, outOfOrder);
+				messageManager.SendOutOfOrderNotice(socket_in, packet.id, (std::uint64_t)expectedId);
 				continue;
 			}
 

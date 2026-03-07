@@ -91,6 +91,11 @@ std::string MessageManager::BuildAckPacket(std::uint64_t id)
 	return "ACK|" + std::to_string(id);
 }
 
+std::string MessageManager::BuildOutOfOrderPayload(std::uint64_t gotId, std::uint64_t expectedId)
+{
+	return "[NET][OUT_OF_ORDER] got=" + std::to_string(gotId) + " expected=" + std::to_string(expectedId);
+}
+
 std::string MessageManager::ExtractPrefixedPayload(const std::string& msg, const std::string& prefix) const
 {
 	if (msg.rfind(prefix, 0) != 0)
@@ -225,6 +230,18 @@ void MessageManager::SendAck(const sockaddr_in& addr, std::uint64_t packetId) co
 {
 	std::string ack = BuildAckPacket(packetId);
 	SendRawMessage(addr, ack);
+}
+
+void MessageManager::SendOutOfOrderNotice(const sockaddr_in& addr, std::uint64_t gotId, std::uint64_t expectedId) const
+{
+	SendRawMessage(addr, BuildOutOfOrderPayload(gotId, expectedId));
+}
+
+void MessageManager::SendOutOfOrderNoticeWithLogging(
+	const std::string& endpoint, const sockaddr_in& addr, std::uint64_t gotId, std::uint64_t expectedId) const
+{
+	std::cout << "[NET][OUT_OF_ORDER] from " << endpoint << " got=" << gotId << " expected=" << expectedId << std::endl;
+	SendOutOfOrderNotice(addr, gotId, expectedId);
 }
 
 void MessageManager::SendQueuedMessagesToEndpoint(
