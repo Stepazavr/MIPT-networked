@@ -41,6 +41,7 @@ void SetConnectionState(bool connected, const std::string& message)
 void StartReconnect()
 {
 	messageManager.ClearAllOutgoingQueues();
+	messageManager.ClearIncomingMessageIdsForEndpoint(MessageManager::MakeEndpoint(serverAddr));
 	lastReceivedServerMessageId.store(-1);
 	isConnecting.store(true);
 	messageManager.SendReliable(serverAddr, "READY");
@@ -122,23 +123,26 @@ void receive_messages()
 		std::string payload;
 		if (packet.type == TransportPacketType::Message)
 		{
-			if (messageManager.IsIncomingMessageDuplicate(endpoint, packet.id))
+			long long expectedId = lastReceivedServerMessageId.load() + 1;
+			long long gotId = (long long)packet.id;
+
+			if (gotId == expectedId)
+			{
+				lastReceivedServerMessageId.store(gotId);
+				messageManager.RememberIncomingMessageId(endpoint, packet.id);
+				messageManager.SendAck(socket_in, packet.id);
+				payload = packet.payload;
+			}
+			else if (gotId < expectedId || messageManager.IsIncomingMessageDuplicate(endpoint, packet.id))
 			{
 				messageManager.SendAck(socket_in, packet.id);
 				continue;
 			}
-
-			long long expectedId = lastReceivedServerMessageId.load() + 1;
-			if ((long long)packet.id != expectedId)
+			else
 			{
 				messageManager.SendOutOfOrderNotice(socket_in, packet.id, (std::uint64_t)expectedId);
 				continue;
 			}
-
-			lastReceivedServerMessageId.store((long long)packet.id);
-			messageManager.RememberIncomingMessageId(endpoint, packet.id);
-			messageManager.SendAck(socket_in, packet.id);
-			payload = packet.payload;
 		}
 		else
 		{

@@ -227,6 +227,23 @@ int main(int argc, const char** argv)
 
 				if (packet.type == TransportPacketType::Message)
 				{
+					if (packet.payload == "READY")
+					{
+						messageManager.ClearIncomingMessageIdsForEndpoint(endpoint);
+						messageManager.ClearOutgoingQueueForEndpoint(endpoint);
+
+						auto clientIt = clients.find(endpoint);
+						if (clientIt != clients.end())
+						{
+							clientIt->second.lastReceivedMessageId = (long long)packet.id;
+						}
+
+						messageManager.RememberIncomingMessageId(endpoint, packet.id);
+						messageManager.SendAck(socketIn, packet.id);
+						handleClientMessage(endpoint, packet.payload, now);
+						continue;
+					}
+
 					if (messageManager.IsIncomingMessageDuplicateWithLogging(endpoint, packet.id, packet.payload))
 					{
 						messageManager.SendAck(socketIn, packet.id);
