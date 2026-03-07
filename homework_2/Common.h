@@ -11,6 +11,7 @@ struct ClientInfo
 	std::string endpoint;
 	sockaddr_in addr;
 	std::chrono::steady_clock::time_point lastPong;
+	long long lastReceivedMessageId = -1;
 };
 
 enum class Command

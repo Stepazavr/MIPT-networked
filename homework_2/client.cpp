@@ -35,6 +35,7 @@ MessageManager messageManager;
 sockaddr_in serverAddr{};
 std::atomic<bool> isConnected{false};
 std::atomic<bool> isConnecting{false};
+std::atomic<long long> lastReceivedServerMessageId{-1};
 const auto heartbeatInterval = std::chrono::seconds(10);
 const auto serverSilenceTimeout = std::chrono::seconds(30);
 
@@ -52,6 +53,7 @@ void SetConnectionState(bool connected, const std::string& message)
 void StartReconnect()
 {
 	messageManager.ClearAllOutgoingQueues();
+	lastReceivedServerMessageId.store(-1);
 	isConnecting.store(true);
 	messageManager.SendReliable(serverAddr, "READY");
 }
@@ -132,15 +134,33 @@ void receive_messages()
 		std::string payload;
 		if (packet.type == TransportPacketType::Message)
 		{
-			messageManager.SendAck(socket_in, packet.id);
-			if (!messageManager.RegisterIncomingMessageId(endpoint, packet.id, packet.payload))
+			if (messageManager.IsIncomingMessageDuplicate(endpoint, packet.id))
+			{
+				messageManager.SendAck(socket_in, packet.id);
 				continue;
+			}
+
+			long long expectedId = lastReceivedServerMessageId.load() + 1;
+			if ((long long)packet.id != expectedId)
+			{
+				std::string outOfOrder =
+					"[NET][OUT_OF_ORDER] got=" + std::to_string(packet.id) + " expected=" + std::to_string(expectedId);
+				messageManager.SendRawMessage(socket_in, outOfOrder);
+				continue;
+			}
+
+			lastReceivedServerMessageId.store((long long)packet.id);
+			messageManager.RememberIncomingMessageId(endpoint, packet.id);
+			messageManager.SendAck(socket_in, packet.id);
 			payload = packet.payload;
 		}
 		else
 		{
 			payload = packet.payload;
 		}
+
+		if (payload.rfind("[NET][OUT_OF_ORDER]", 0) == 0)
+			continue;
 
 		std::cout << "\rServer: " << payload << "\n";
 		std::cout << "> " << buffered_msg << std::flush;
@@ -217,6 +237,7 @@ int main(int argc, const char** argv)
 	std::cout << "ChatClient - Type '/quit' to exit\n";
 
 	const char* readyMsg = "READY";
+	lastReceivedServerMessageId.store(-1);
 	messageManager.SendReliable(serverAddr, readyMsg);
 	isConnecting.store(true);
 

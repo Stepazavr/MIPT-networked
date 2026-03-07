@@ -325,22 +325,13 @@ int MessageManager::ProcessReliableRetriesWithLogging(std::chrono::steady_clock:
 void MessageManager::ClearOutgoingQueueForEndpoint(const std::string& endpoint)
 {
 	std::lock_guard<std::mutex> lock(outgoingMutex);
-	auto it = outgoingByEndpoint.find(endpoint);
-	if (it == outgoingByEndpoint.end())
-		return;
-
-	it->second.queue.clear();
-	it->second.hasLastRetrySend = false;
+	outgoingByEndpoint.erase(endpoint);
 }
 
 void MessageManager::ClearAllOutgoingQueues()
 {
 	std::lock_guard<std::mutex> lock(outgoingMutex);
-	for (auto& entry : outgoingByEndpoint)
-	{
-		entry.second.queue.clear();
-		entry.second.hasLastRetrySend = false;
-	}
+	outgoingByEndpoint.clear();
 }
 
 bool MessageManager::RegisterIncomingMessageIdInternal(
@@ -352,22 +343,50 @@ bool MessageManager::RegisterIncomingMessageIdInternal(
 	return inserted;
 }
 
+bool MessageManager::IsIncomingMessageDuplicate(const std::string& endpoint, std::uint64_t packetId)
+{
+	std::lock_guard<std::mutex> lock(receivedIdsMutex);
+	std::string key = endpoint + "|" + std::to_string(packetId);
+	return receivedMessageIds.find(key) != receivedMessageIds.end();
+}
+
+bool MessageManager::IsIncomingMessageDuplicateWithLogging(
+	const std::string& endpoint, std::uint64_t packetId, const std::string& payload)
+{
+	bool isDuplicate = IsIncomingMessageDuplicate(endpoint, packetId);
+	if (isDuplicate)
+	{
+		std::cout << "[NET][DUPLICATE] duplicate packet " << packetId << " from " << endpoint << ", message='"
+				  << payload << "'" << std::endl;
+	}
+	return isDuplicate;
+}
+
+void MessageManager::RememberIncomingMessageId(const std::string& endpoint, std::uint64_t packetId)
+{
+	std::lock_guard<std::mutex> lock(receivedIdsMutex);
+	std::string key = endpoint + "|" + std::to_string(packetId);
+	receivedMessageIds.insert(key);
+}
+
 bool MessageManager::RegisterIncomingMessageId(
 	const std::string& endpoint, std::uint64_t packetId, const std::string& payload)
 {
-	return RegisterIncomingMessageIdInternal(endpoint, packetId, payload);
+	if (IsIncomingMessageDuplicate(endpoint, packetId))
+		return false;
+
+	RememberIncomingMessageId(endpoint, packetId);
+	return true;
 }
 
 bool MessageManager::RegisterIncomingMessageIdWithLogging(
 	const std::string& endpoint, std::uint64_t packetId, const std::string& payload)
 {
-	bool inserted = RegisterIncomingMessageIdInternal(endpoint, packetId, payload);
-	if (!inserted)
-	{
-		std::cout << "[NET][DUPLICATE] duplicate packet " << packetId << " from " << endpoint << ", message='"
-				  << payload << "'" << std::endl;
-	}
-	return inserted;
+	if (IsIncomingMessageDuplicateWithLogging(endpoint, packetId, payload))
+		return false;
+
+	RememberIncomingMessageId(endpoint, packetId);
+	return true;
 }
 
 void MessageManager::ClearIncomingMessageIdsForEndpoint(const std::string& endpoint)

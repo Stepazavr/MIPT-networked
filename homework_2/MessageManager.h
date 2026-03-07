@@ -30,6 +30,10 @@ public:
 	int ProcessReliableRetriesWithLogging(std::chrono::steady_clock::time_point now);
 	void ClearOutgoingQueueForEndpoint(const std::string& endpoint);
 	void ClearAllOutgoingQueues();
+	bool IsIncomingMessageDuplicate(const std::string& endpoint, std::uint64_t packetId);
+	bool IsIncomingMessageDuplicateWithLogging(
+		const std::string& endpoint, std::uint64_t packetId, const std::string& payload);
+	void RememberIncomingMessageId(const std::string& endpoint, std::uint64_t packetId);
 	bool RegisterIncomingMessageId(const std::string& endpoint, std::uint64_t packetId, const std::string& payload);
 	bool RegisterIncomingMessageIdWithLogging(
 		const std::string& endpoint, std::uint64_t packetId, const std::string& payload);
@@ -46,7 +50,7 @@ private:
 	struct EndpointOutgoingState
 	{
 		sockaddr_in addr{};
-		std::uint64_t nextPacketId = 1;
+		std::uint64_t nextPacketId = 0;
 		std::deque<OutgoingReliablePacket> queue;
 		std::chrono::steady_clock::time_point lastRetrySend{};
 		bool hasLastRetrySend = false;

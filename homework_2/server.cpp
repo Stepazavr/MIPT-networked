@@ -236,11 +236,31 @@ int main(int argc, const char** argv)
 
 				if (packet.type == TransportPacketType::Message)
 				{
-					messageManager.SendAck(socketIn, packet.id);
-					if (!messageManager.RegisterIncomingMessageIdWithLogging(endpoint, packet.id, packet.payload))
+					if (messageManager.IsIncomingMessageDuplicateWithLogging(endpoint, packet.id, packet.payload))
 					{
+						messageManager.SendAck(socketIn, packet.id);
 						continue;
 					}
+
+					auto clientIt = clients.find(endpoint);
+					if (clientIt != clients.end())
+					{
+						long long expectedId = clientIt->second.lastReceivedMessageId + 1;
+						if ((long long)packet.id != expectedId)
+						{
+							std::string outOfOrder = "[NET][OUT_OF_ORDER] got=" + std::to_string(packet.id) +
+													 " expected=" + std::to_string(expectedId);
+							std::cout << "[NET][OUT_OF_ORDER] from " << endpoint << " got=" << packet.id
+									  << " expected=" << expectedId << std::endl;
+							messageManager.SendRawMessage(socketIn, outOfOrder);
+							continue;
+						}
+
+						clientIt->second.lastReceivedMessageId = (long long)packet.id;
+					}
+					messageManager.RememberIncomingMessageId(endpoint, packet.id);
+
+					messageManager.SendAck(socketIn, packet.id);
 					handleClientMessage(endpoint, packet.payload, now);
 					continue;
 				}
