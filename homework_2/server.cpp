@@ -60,6 +60,7 @@ void handleTimeouts(std::chrono::steady_clock::time_point now)
 		}
 		clients.erase(endpoint);
 		messageManager.ClearIncomingMessageIdsForEndpoint(endpoint);
+		messageManager.ClearOutgoingQueueForEndpoint(endpoint);
 	}
 }
 
@@ -94,6 +95,7 @@ void handleClientMessage(const std::string& endpoint, const std::string& msg, st
 			}
 			clients.erase(endpoint);
 			messageManager.ClearIncomingMessageIdsForEndpoint(endpoint);
+			messageManager.ClearOutgoingQueueForEndpoint(endpoint);
 			break;
 		case Command::Duel:
 			duelManager.HandleDuelRequest(endpoint);

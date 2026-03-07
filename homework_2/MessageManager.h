@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -26,21 +27,30 @@ public:
 	void SendAck(const sockaddr_in& addr, std::uint64_t packetId) const;
 	bool HandleIncomingAck(const std::string& endpoint, std::uint64_t packetId);
 	int ProcessReliableRetries(std::chrono::steady_clock::time_point now);
+	void ClearOutgoingQueueForEndpoint(const std::string& endpoint);
+	void ClearAllOutgoingQueues();
 	bool RegisterIncomingMessageId(const std::string& endpoint, std::uint64_t packetId, const std::string& payload);
 	void ClearIncomingMessageIdsForEndpoint(const std::string& endpoint);
 
 private:
-	struct PendingReliablePacket
+	struct OutgoingReliablePacket
 	{
-		sockaddr_in addr;
-		std::string endpoint;
+		std::uint64_t id = 0;
 		std::string packet;
 		std::string payload;
-		std::chrono::steady_clock::time_point lastSend;
-		int retries = 0;
+	};
+
+	struct EndpointOutgoingState
+	{
+		sockaddr_in addr{};
+		std::uint64_t nextPacketId = 1;
+		std::deque<OutgoingReliablePacket> queue;
+		std::chrono::steady_clock::time_point lastRetrySend{};
+		bool hasLastRetrySend = false;
 	};
 
 	void SendReliableInternal(const std::string& endpoint, const sockaddr_in& addr, const std::string& msg);
+	void SendQueuedMessagesToEndpoint(const std::string& endpoint, EndpointOutgoingState& state, bool isRetry);
 	std::string ExtractPrefixedPayload(const std::string& msg, const std::string& prefix) const;
 	bool ExtractWhisperArgs(const std::string& msg, unsigned short& port, std::string& payload) const;
 	bool TryParseAnswer(const std::string& msg, int& value) const;
@@ -48,13 +58,11 @@ private:
 	static std::string BuildAckPacket(std::uint64_t id);
 
 	int socketFd = -1;
-	std::uint64_t nextPacketId = 1;
-	std::unordered_map<std::uint64_t, PendingReliablePacket> pendingPackets;
-	mutable std::mutex pendingMutex;
+	std::unordered_map<std::string, EndpointOutgoingState> outgoingByEndpoint;
+	mutable std::mutex outgoingMutex;
 	std::unordered_set<std::string> receivedMessageIds;
 	mutable std::mutex receivedIdsMutex;
-	const std::chrono::milliseconds ackTimeout{700};
-	const int maxRetries = 5;
+	const std::chrono::milliseconds retryInterval{1000};
 
 	const std::unordered_map<std::string, Command> commandMap = {{"PONG", Command::Pong}, {"/quit", Command::Quit}};
 };

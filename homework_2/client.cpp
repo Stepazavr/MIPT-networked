@@ -33,17 +33,27 @@ int sfd;
 
 MessageManager messageManager;
 sockaddr_in serverAddr{};
-bool isConnected = false;
+std::atomic<bool> isConnected{false};
+std::atomic<bool> isConnecting{false};
 const auto heartbeatInterval = std::chrono::seconds(10);
+const auto serverSilenceTimeout = std::chrono::seconds(30);
 
 void SetConnectionState(bool connected, const std::string& message)
 {
-	if (isConnected == connected)
+	bool current = isConnected.load();
+	if (current == connected)
 		return;
 
-	isConnected = connected;
+	isConnected.store(connected);
 	std::cout << "\r" << message << "\n"
 			  << "> " << buffered_msg << std::flush;
+}
+
+void StartReconnect()
+{
+	messageManager.ClearAllOutgoingQueues();
+	isConnecting.store(true);
+	messageManager.SendReliable(serverAddr, "READY");
 }
 
 void receive_messages()
@@ -51,20 +61,35 @@ void receive_messages()
 	constexpr size_t buf_size = 1000;
 	char buffer[buf_size];
 	auto lastHeartbeat = std::chrono::steady_clock::now();
+	auto lastServerActivity = std::chrono::steady_clock::now();
+	bool silenceHandled = false;
 
 	while (running)
 	{
 		auto now = std::chrono::steady_clock::now();
-		if (now - lastHeartbeat >= heartbeatInterval)
+		bool connected = isConnected.load();
+		bool connecting = isConnecting.load();
+
+		if (connected && now - lastHeartbeat >= heartbeatInterval)
 		{
 			messageManager.SendReliable(serverAddr, "PING");
 			lastHeartbeat = now;
 		}
 
-		int droppedCount = messageManager.ProcessReliableRetries(now);
-		if (droppedCount > 0)
+		if (connected || connecting)
 		{
-			SetConnectionState(false, "[NET] server does not respond");
+			messageManager.ProcessReliableRetries(now);
+		}
+
+		if ((connected || connecting) && now - lastServerActivity >= serverSilenceTimeout)
+		{
+			if (!silenceHandled)
+			{
+				SetConnectionState(false, "[NET] disconnected: no messages from server for 30s");
+				messageManager.ClearAllOutgoingQueues();
+				isConnecting.store(false);
+				silenceHandled = true;
+			}
 		}
 
 		fd_set read_set;
@@ -83,6 +108,9 @@ void receive_messages()
 		if (num_bytes <= 0)
 			continue;
 
+		lastServerActivity = now;
+		silenceHandled = false;
+
 		std::string raw(buffer, buffer + num_bytes);
 		TransportPacket packet;
 		if (!messageManager.ParseTransportPacket(raw, packet))
@@ -95,6 +123,7 @@ void receive_messages()
 			bool ackAccepted = messageManager.HandleIncomingAck(endpoint, packet.id);
 			if (ackAccepted)
 			{
+				isConnecting.store(false);
 				SetConnectionState(true, "[NET] connected successfully");
 			}
 			continue;
@@ -142,13 +171,22 @@ void handle_input()
 	{
 		if (buffered_msg == "/quit")
 		{
-			messageManager.SendReliable(serverAddr, buffered_msg);
+			if (isConnected.load() || isConnecting.load())
+			{
+				messageManager.SendReliable(serverAddr, buffered_msg);
+			}
 			running = false;
 			std::cout << "\nExiting...\n";
 		}
 		else if (!buffered_msg.empty())
 		{
 			std::cout << "\rYou sent: " << buffered_msg << "\n";
+
+			if (!isConnected.load() && !isConnecting.load())
+			{
+				SetConnectionState(false, "[NET] trying to reconnect");
+				StartReconnect();
+			}
 			messageManager.SendReliable(serverAddr, buffered_msg);
 
 			buffered_msg.clear();
@@ -180,6 +218,7 @@ int main(int argc, const char** argv)
 
 	const char* readyMsg = "READY";
 	messageManager.SendReliable(serverAddr, readyMsg);
+	isConnecting.store(true);
 
 	std::cout << "Trying to connect server\n"
 			  << "> ";

@@ -227,13 +227,34 @@ void MessageManager::SendAck(const sockaddr_in& addr, std::uint64_t packetId) co
 	SendRawMessage(addr, ack);
 }
 
+void MessageManager::SendQueuedMessagesToEndpoint(
+	const std::string& endpoint, EndpointOutgoingState& state, bool isRetry)
+{
+	for (const auto& queued : state.queue)
+	{
+		SendRawMessage(state.addr, queued.packet);
+		if (isRetry)
+		{
+			std::cout << "[NET][LOSS] retry packet " << queued.id << " to " << endpoint << ", message='"
+					  << queued.payload << "'" << std::endl;
+		}
+	}
+}
+
 void MessageManager::SendReliableInternal(const std::string& endpoint, const sockaddr_in& addr, const std::string& msg)
 {
-	std::lock_guard<std::mutex> lock(pendingMutex);
-	std::uint64_t packetId = nextPacketId++;
+	std::lock_guard<std::mutex> lock(outgoingMutex);
+	EndpointOutgoingState& state = outgoingByEndpoint[endpoint];
+	state.addr = addr;
+
+	std::uint64_t packetId = state.nextPacketId++;
 	std::string packet = BuildMessagePacket(packetId, msg);
-	SendRawMessage(addr, packet);
-	pendingPackets[packetId] = PendingReliablePacket{addr, endpoint, packet, msg, std::chrono::steady_clock::now(), 0};
+	state.queue.push_back(OutgoingReliablePacket{packetId, packet, msg});
+
+	// Immediate send for a new message: send only this packet.
+	SendRawMessage(state.addr, state.queue.back().packet);
+	state.lastRetrySend = std::chrono::steady_clock::now();
+	state.hasLastRetrySend = true;
 }
 
 void MessageManager::SendReliable(const sockaddr_in& addr, const std::string& msg)
@@ -243,49 +264,73 @@ void MessageManager::SendReliable(const sockaddr_in& addr, const std::string& ms
 
 bool MessageManager::HandleIncomingAck(const std::string& endpoint, std::uint64_t packetId)
 {
-	std::lock_guard<std::mutex> lock(pendingMutex);
-	auto it = pendingPackets.find(packetId);
-	if (it == pendingPackets.end())
+	std::lock_guard<std::mutex> lock(outgoingMutex);
+	auto endpointIt = outgoingByEndpoint.find(endpoint);
+	if (endpointIt == outgoingByEndpoint.end())
 		return false;
 
-	if (it->second.endpoint != endpoint)
+	EndpointOutgoingState& state = endpointIt->second;
+	if (state.queue.empty())
 		return false;
 
-	pendingPackets.erase(it);
-	return true;
+	bool removedAny = false;
+	while (!state.queue.empty() && state.queue.front().id <= packetId)
+	{
+		state.queue.pop_front();
+		removedAny = true;
+	}
+
+	if (state.queue.empty())
+	{
+		state.hasLastRetrySend = false;
+	}
+
+	return removedAny;
 }
 
 int MessageManager::ProcessReliableRetries(std::chrono::steady_clock::time_point now)
 {
-	std::lock_guard<std::mutex> lock(pendingMutex);
-	std::vector<std::uint64_t> toDrop;
-	for (auto& entry : pendingPackets)
+	std::lock_guard<std::mutex> lock(outgoingMutex);
+	int resentPackets = 0;
+	for (auto& entry : outgoingByEndpoint)
 	{
-		PendingReliablePacket& pending = entry.second;
-		if (now - pending.lastSend < ackTimeout)
+		const std::string& endpoint = entry.first;
+		EndpointOutgoingState& state = entry.second;
+
+		if (state.queue.empty())
 			continue;
 
-		if (pending.retries >= maxRetries)
-		{
-			std::cout << "[NET][LOSS] no ACK from " << pending.endpoint << " for packet " << entry.first
-					  << ", message='" << pending.payload << "', drop after " << maxRetries << " retries" << std::endl;
-			toDrop.push_back(entry.first);
+		if (state.hasLastRetrySend && now - state.lastRetrySend < retryInterval)
 			continue;
-		}
 
-		SendRawMessage(pending.addr, pending.packet);
-		pending.lastSend = now;
-		++pending.retries;
-		std::cout << "[NET][LOSS] retry packet " << entry.first << " to " << pending.endpoint << " (attempt "
-				  << pending.retries << "), message='" << pending.payload << "'" << std::endl;
+		SendQueuedMessagesToEndpoint(endpoint, state, true);
+		state.lastRetrySend = now;
+		state.hasLastRetrySend = true;
+		resentPackets += (int)state.queue.size();
 	}
 
-	for (std::uint64_t packetId : toDrop)
+	return resentPackets;
+}
+
+void MessageManager::ClearOutgoingQueueForEndpoint(const std::string& endpoint)
+{
+	std::lock_guard<std::mutex> lock(outgoingMutex);
+	auto it = outgoingByEndpoint.find(endpoint);
+	if (it == outgoingByEndpoint.end())
+		return;
+
+	it->second.queue.clear();
+	it->second.hasLastRetrySend = false;
+}
+
+void MessageManager::ClearAllOutgoingQueues()
+{
+	std::lock_guard<std::mutex> lock(outgoingMutex);
+	for (auto& entry : outgoingByEndpoint)
 	{
-		pendingPackets.erase(packetId);
+		entry.second.queue.clear();
+		entry.second.hasLastRetrySend = false;
 	}
-
-	return (int)toDrop.size();
 }
 
 bool MessageManager::RegisterIncomingMessageId(
