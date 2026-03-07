@@ -228,12 +228,12 @@ void MessageManager::SendAck(const sockaddr_in& addr, std::uint64_t packetId) co
 }
 
 void MessageManager::SendQueuedMessagesToEndpoint(
-	const std::string& endpoint, EndpointOutgoingState& state, bool isRetry)
+	const std::string& endpoint, EndpointOutgoingState& state, bool isRetry, bool shouldLog)
 {
 	for (const auto& queued : state.queue)
 	{
 		SendRawMessage(state.addr, queued.packet);
-		if (isRetry)
+		if (isRetry && shouldLog)
 		{
 			std::cout << "[NET][LOSS] retry packet " << queued.id << " to " << endpoint << ", message='"
 					  << queued.payload << "'" << std::endl;
@@ -288,7 +288,7 @@ bool MessageManager::HandleIncomingAck(const std::string& endpoint, std::uint64_
 	return removedAny;
 }
 
-int MessageManager::ProcessReliableRetries(std::chrono::steady_clock::time_point now)
+int MessageManager::ProcessReliableRetriesInternal(std::chrono::steady_clock::time_point now, bool shouldLog)
 {
 	std::lock_guard<std::mutex> lock(outgoingMutex);
 	int resentPackets = 0;
@@ -303,13 +303,23 @@ int MessageManager::ProcessReliableRetries(std::chrono::steady_clock::time_point
 		if (state.hasLastRetrySend && now - state.lastRetrySend < retryInterval)
 			continue;
 
-		SendQueuedMessagesToEndpoint(endpoint, state, true);
+		SendQueuedMessagesToEndpoint(endpoint, state, true, shouldLog);
 		state.lastRetrySend = now;
 		state.hasLastRetrySend = true;
 		resentPackets += (int)state.queue.size();
 	}
 
 	return resentPackets;
+}
+
+int MessageManager::ProcessReliableRetries(std::chrono::steady_clock::time_point now)
+{
+	return ProcessReliableRetriesInternal(now, false);
+}
+
+int MessageManager::ProcessReliableRetriesWithLogging(std::chrono::steady_clock::time_point now)
+{
+	return ProcessReliableRetriesInternal(now, true);
 }
 
 void MessageManager::ClearOutgoingQueueForEndpoint(const std::string& endpoint)
@@ -333,12 +343,25 @@ void MessageManager::ClearAllOutgoingQueues()
 	}
 }
 
-bool MessageManager::RegisterIncomingMessageId(
+bool MessageManager::RegisterIncomingMessageIdInternal(
 	const std::string& endpoint, std::uint64_t packetId, const std::string& payload)
 {
 	std::lock_guard<std::mutex> lock(receivedIdsMutex);
 	std::string key = endpoint + "|" + std::to_string(packetId);
 	auto [_, inserted] = receivedMessageIds.insert(key);
+	return inserted;
+}
+
+bool MessageManager::RegisterIncomingMessageId(
+	const std::string& endpoint, std::uint64_t packetId, const std::string& payload)
+{
+	return RegisterIncomingMessageIdInternal(endpoint, packetId, payload);
+}
+
+bool MessageManager::RegisterIncomingMessageIdWithLogging(
+	const std::string& endpoint, std::uint64_t packetId, const std::string& payload)
+{
+	bool inserted = RegisterIncomingMessageIdInternal(endpoint, packetId, payload);
 	if (!inserted)
 	{
 		std::cout << "[NET][DUPLICATE] duplicate packet " << packetId << " from " << endpoint << ", message='"

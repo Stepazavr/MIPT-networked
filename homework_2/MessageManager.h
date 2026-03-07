@@ -27,9 +27,12 @@ public:
 	void SendAck(const sockaddr_in& addr, std::uint64_t packetId) const;
 	bool HandleIncomingAck(const std::string& endpoint, std::uint64_t packetId);
 	int ProcessReliableRetries(std::chrono::steady_clock::time_point now);
+	int ProcessReliableRetriesWithLogging(std::chrono::steady_clock::time_point now);
 	void ClearOutgoingQueueForEndpoint(const std::string& endpoint);
 	void ClearAllOutgoingQueues();
 	bool RegisterIncomingMessageId(const std::string& endpoint, std::uint64_t packetId, const std::string& payload);
+	bool RegisterIncomingMessageIdWithLogging(
+		const std::string& endpoint, std::uint64_t packetId, const std::string& payload);
 	void ClearIncomingMessageIdsForEndpoint(const std::string& endpoint);
 
 private:
@@ -50,7 +53,11 @@ private:
 	};
 
 	void SendReliableInternal(const std::string& endpoint, const sockaddr_in& addr, const std::string& msg);
-	void SendQueuedMessagesToEndpoint(const std::string& endpoint, EndpointOutgoingState& state, bool isRetry);
+	void SendQueuedMessagesToEndpoint(
+		const std::string& endpoint, EndpointOutgoingState& state, bool isRetry, bool shouldLog);
+	int ProcessReliableRetriesInternal(std::chrono::steady_clock::time_point now, bool shouldLog);
+	bool RegisterIncomingMessageIdInternal(
+		const std::string& endpoint, std::uint64_t packetId, const std::string& payload);
 	std::string ExtractPrefixedPayload(const std::string& msg, const std::string& prefix) const;
 	bool ExtractWhisperArgs(const std::string& msg, unsigned short& port, std::string& payload) const;
 	bool TryParseAnswer(const std::string& msg, int& value) const;

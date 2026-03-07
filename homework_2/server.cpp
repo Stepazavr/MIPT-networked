@@ -237,7 +237,7 @@ int main(int argc, const char** argv)
 				if (packet.type == TransportPacketType::Message)
 				{
 					messageManager.SendAck(socketIn, packet.id);
-					if (!messageManager.RegisterIncomingMessageId(endpoint, packet.id, packet.payload))
+					if (!messageManager.RegisterIncomingMessageIdWithLogging(endpoint, packet.id, packet.payload))
 					{
 						continue;
 					}
@@ -250,7 +250,7 @@ int main(int argc, const char** argv)
 		}
 
 		auto now = std::chrono::steady_clock::now();
-		messageManager.ProcessReliableRetries(now);
+		messageManager.ProcessReliableRetriesWithLogging(now);
 		handleTimeouts(now);
 	}
 	return 0;
