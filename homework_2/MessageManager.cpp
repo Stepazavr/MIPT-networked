@@ -233,7 +233,7 @@ void MessageManager::SendReliableInternal(const std::string& endpoint, const soc
 	std::uint64_t packetId = nextPacketId++;
 	std::string packet = BuildMessagePacket(packetId, msg);
 	SendRawMessage(addr, packet);
-	pendingPackets[packetId] = PendingReliablePacket{addr, endpoint, packet, std::chrono::steady_clock::now(), 0};
+	pendingPackets[packetId] = PendingReliablePacket{addr, endpoint, packet, msg, std::chrono::steady_clock::now(), 0};
 }
 
 void MessageManager::SendReliable(const sockaddr_in& addr, const std::string& msg)
@@ -268,7 +268,7 @@ int MessageManager::ProcessReliableRetries(std::chrono::steady_clock::time_point
 		if (pending.retries >= maxRetries)
 		{
 			std::cout << "[NET][LOSS] no ACK from " << pending.endpoint << " for packet " << entry.first
-					  << ", drop after " << maxRetries << " retries" << std::endl;
+					  << ", message='" << pending.payload << "', drop after " << maxRetries << " retries" << std::endl;
 			toDrop.push_back(entry.first);
 			continue;
 		}
@@ -277,7 +277,7 @@ int MessageManager::ProcessReliableRetries(std::chrono::steady_clock::time_point
 		pending.lastSend = now;
 		++pending.retries;
 		std::cout << "[NET][LOSS] retry packet " << entry.first << " to " << pending.endpoint << " (attempt "
-				  << pending.retries << ")" << std::endl;
+				  << pending.retries << "), message='" << pending.payload << "'" << std::endl;
 	}
 
 	for (std::uint64_t packetId : toDrop)
@@ -286,4 +286,34 @@ int MessageManager::ProcessReliableRetries(std::chrono::steady_clock::time_point
 	}
 
 	return (int)toDrop.size();
+}
+
+bool MessageManager::RegisterIncomingMessageId(
+	const std::string& endpoint, std::uint64_t packetId, const std::string& payload)
+{
+	std::lock_guard<std::mutex> lock(receivedIdsMutex);
+	std::string key = endpoint + "|" + std::to_string(packetId);
+	auto [_, inserted] = receivedMessageIds.insert(key);
+	if (!inserted)
+	{
+		std::cout << "[NET][DUPLICATE] duplicate packet " << packetId << " from " << endpoint << ", message='"
+				  << payload << "'" << std::endl;
+	}
+	return inserted;
+}
+
+void MessageManager::ClearIncomingMessageIdsForEndpoint(const std::string& endpoint)
+{
+	std::lock_guard<std::mutex> lock(receivedIdsMutex);
+	for (auto it = receivedMessageIds.begin(); it != receivedMessageIds.end();)
+	{
+		if (it->rfind(endpoint + "|", 0) == 0)
+		{
+			it = receivedMessageIds.erase(it);
+		}
+		else
+		{
+			++it;
+		}
+	}
 }

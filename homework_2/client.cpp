@@ -104,6 +104,8 @@ void receive_messages()
 		if (packet.type == TransportPacketType::Message)
 		{
 			messageManager.SendAck(socket_in, packet.id);
+			if (!messageManager.RegisterIncomingMessageId(endpoint, packet.id, packet.payload))
+				continue;
 			payload = packet.payload;
 		}
 		else

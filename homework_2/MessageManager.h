@@ -5,6 +5,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "Common.h"
 
@@ -25,6 +26,8 @@ public:
 	void SendAck(const sockaddr_in& addr, std::uint64_t packetId) const;
 	bool HandleIncomingAck(const std::string& endpoint, std::uint64_t packetId);
 	int ProcessReliableRetries(std::chrono::steady_clock::time_point now);
+	bool RegisterIncomingMessageId(const std::string& endpoint, std::uint64_t packetId, const std::string& payload);
+	void ClearIncomingMessageIdsForEndpoint(const std::string& endpoint);
 
 private:
 	struct PendingReliablePacket
@@ -32,6 +35,7 @@ private:
 		sockaddr_in addr;
 		std::string endpoint;
 		std::string packet;
+		std::string payload;
 		std::chrono::steady_clock::time_point lastSend;
 		int retries = 0;
 	};
@@ -47,6 +51,8 @@ private:
 	std::uint64_t nextPacketId = 1;
 	std::unordered_map<std::uint64_t, PendingReliablePacket> pendingPackets;
 	mutable std::mutex pendingMutex;
+	std::unordered_set<std::string> receivedMessageIds;
+	mutable std::mutex receivedIdsMutex;
 	const std::chrono::milliseconds ackTimeout{700};
 	const int maxRetries = 5;
 

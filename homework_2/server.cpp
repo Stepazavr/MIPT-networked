@@ -59,6 +59,7 @@ void handleTimeouts(std::chrono::steady_clock::time_point now)
 				messageManager.SendReliable(it->second.addr, winMsg);
 		}
 		clients.erase(endpoint);
+		messageManager.ClearIncomingMessageIdsForEndpoint(endpoint);
 	}
 }
 
@@ -92,6 +93,7 @@ void handleClientMessage(const std::string& endpoint, const std::string& msg, st
 				}
 			}
 			clients.erase(endpoint);
+			messageManager.ClearIncomingMessageIdsForEndpoint(endpoint);
 			break;
 		case Command::Duel:
 			duelManager.HandleDuelRequest(endpoint);
@@ -233,6 +235,10 @@ int main(int argc, const char** argv)
 				if (packet.type == TransportPacketType::Message)
 				{
 					messageManager.SendAck(socketIn, packet.id);
+					if (!messageManager.RegisterIncomingMessageId(endpoint, packet.id, packet.payload))
+					{
+						continue;
+					}
 					handleClientMessage(endpoint, packet.payload, now);
 					continue;
 				}
