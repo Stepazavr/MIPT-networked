@@ -23,8 +23,8 @@ public:
 	void SendReliable(const sockaddr_in& addr, const std::string& msg);
 	void SendRawMessage(const sockaddr_in& addr, const std::string& msg) const;
 	void SendAck(const sockaddr_in& addr, std::uint64_t packetId) const;
-	void HandleIncomingAck(const std::string& endpoint, std::uint64_t packetId);
-	void ProcessReliableRetries(std::chrono::steady_clock::time_point now);
+	bool HandleIncomingAck(const std::string& endpoint, std::uint64_t packetId);
+	int ProcessReliableRetries(std::chrono::steady_clock::time_point now);
 
 private:
 	struct PendingReliablePacket

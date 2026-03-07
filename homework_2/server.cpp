@@ -20,6 +20,7 @@ int sfd = -1;
 
 DuelManager duelManager;
 MessageManager messageManager;
+const auto disconnectTimeout = std::chrono::seconds(30);
 
 void touch_client(const std::string& endpoint, const sockaddr_in& addr, std::chrono::steady_clock::time_point now)
 {
@@ -34,27 +35,10 @@ void touch_client(const std::string& endpoint, const sockaddr_in& addr, std::chr
 	it->second.addr = addr;
 }
 
-const auto disconnectTimeout = std::chrono::seconds(30);
-const auto pingInterval = std::chrono::seconds(5);
-
-void sendPings(std::chrono::steady_clock::time_point now, std::chrono::steady_clock::time_point& lastPing,
-	std::chrono::steady_clock::duration pingInterval)
-{
-	if (now - lastPing < pingInterval)
-		return;
-
-	for (auto& entry : clients)
-	{
-		const char* pingMsg = "PING";
-		messageManager.SendRawMessage(entry.second.addr, pingMsg);
-	}
-	lastPing = now;
-}
-
-void handleTimeouts(std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration disconnectTimeout)
+void handleTimeouts(std::chrono::steady_clock::time_point now)
 {
 	std::vector<std::string> toDisconnect;
-	for (auto& entry : clients)
+	for (const auto& entry : clients)
 	{
 		if (now - entry.second.lastPong > disconnectTimeout)
 		{
@@ -64,7 +48,7 @@ void handleTimeouts(std::chrono::steady_clock::time_point now, std::chrono::stea
 
 	for (const auto& endpoint : toDisconnect)
 	{
-		std::cout << "Disconnected (timeout): " << endpoint << std::endl;
+		std::cout << "Disconnected (no PING timeout): " << endpoint << std::endl;
 		std::string opponent;
 		duelManager.CleanupDuelByPlayer(endpoint, opponent);
 		if (!opponent.empty())
@@ -80,15 +64,20 @@ void handleTimeouts(std::chrono::steady_clock::time_point now, std::chrono::stea
 
 void handleClientMessage(const std::string& endpoint, const std::string& msg, std::chrono::steady_clock::time_point now)
 {
+	if (msg == "PING")
+	{
+		auto it = clients.find(endpoint);
+		if (it != clients.end())
+		{
+			it->second.lastPong = now;
+		}
+		return;
+	}
+
 	switch (messageManager.ParseCommand(msg))
 	{
 		case Command::Pong:
-		{
-			auto pongIt = clients.find(endpoint);
-			if (pongIt != clients.end())
-				pongIt->second.lastPong = now;
 			break;
-		}
 		case Command::Quit:
 			std::cout << "Disconnected: " << endpoint << std::endl;
 			{
@@ -203,8 +192,6 @@ int main(int argc, const char** argv)
 
 	std::cout << "ChatServer - Listening!\n";
 
-	auto lastPing = std::chrono::steady_clock::now();
-
 	while (true)
 	{
 		fd_set readSet;
@@ -256,8 +243,7 @@ int main(int argc, const char** argv)
 
 		auto now = std::chrono::steady_clock::now();
 		messageManager.ProcessReliableRetries(now);
-		sendPings(now, lastPing, pingInterval);
-		handleTimeouts(now, disconnectTimeout);
+		handleTimeouts(now);
 	}
 	return 0;
 }

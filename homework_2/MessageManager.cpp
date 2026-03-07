@@ -241,20 +241,21 @@ void MessageManager::SendReliable(const sockaddr_in& addr, const std::string& ms
 	SendReliableInternal(MakeEndpoint(addr), addr, msg);
 }
 
-void MessageManager::HandleIncomingAck(const std::string& endpoint, std::uint64_t packetId)
+bool MessageManager::HandleIncomingAck(const std::string& endpoint, std::uint64_t packetId)
 {
 	std::lock_guard<std::mutex> lock(pendingMutex);
 	auto it = pendingPackets.find(packetId);
 	if (it == pendingPackets.end())
-		return;
+		return false;
 
 	if (it->second.endpoint != endpoint)
-		return;
+		return false;
 
 	pendingPackets.erase(it);
+	return true;
 }
 
-void MessageManager::ProcessReliableRetries(std::chrono::steady_clock::time_point now)
+int MessageManager::ProcessReliableRetries(std::chrono::steady_clock::time_point now)
 {
 	std::lock_guard<std::mutex> lock(pendingMutex);
 	std::vector<std::uint64_t> toDrop;
@@ -283,4 +284,6 @@ void MessageManager::ProcessReliableRetries(std::chrono::steady_clock::time_poin
 	{
 		pendingPackets.erase(packetId);
 	}
+
+	return (int)toDrop.size();
 }

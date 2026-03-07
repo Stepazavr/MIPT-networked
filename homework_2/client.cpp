@@ -33,15 +33,39 @@ int sfd;
 
 MessageManager messageManager;
 sockaddr_in serverAddr{};
+bool isConnected = false;
+const auto heartbeatInterval = std::chrono::seconds(10);
+
+void SetConnectionState(bool connected, const std::string& message)
+{
+	if (isConnected == connected)
+		return;
+
+	isConnected = connected;
+	std::cout << "\r" << message << "\n"
+			  << "> " << buffered_msg << std::flush;
+}
 
 void receive_messages()
 {
 	constexpr size_t buf_size = 1000;
 	char buffer[buf_size];
+	auto lastHeartbeat = std::chrono::steady_clock::now();
 
 	while (running)
 	{
-		messageManager.ProcessReliableRetries(std::chrono::steady_clock::now());
+		auto now = std::chrono::steady_clock::now();
+		if (now - lastHeartbeat >= heartbeatInterval)
+		{
+			messageManager.SendReliable(serverAddr, "PING");
+			lastHeartbeat = now;
+		}
+
+		int droppedCount = messageManager.ProcessReliableRetries(now);
+		if (droppedCount > 0)
+		{
+			SetConnectionState(false, "[NET] server does not respond");
+		}
 
 		fd_set read_set;
 		FD_ZERO(&read_set);
@@ -68,7 +92,11 @@ void receive_messages()
 
 		if (packet.type == TransportPacketType::Ack)
 		{
-			messageManager.HandleIncomingAck(endpoint, packet.id);
+			bool ackAccepted = messageManager.HandleIncomingAck(endpoint, packet.id);
+			if (ackAccepted)
+			{
+				SetConnectionState(true, "[NET] connected successfully");
+			}
 			continue;
 		}
 
@@ -81,13 +109,6 @@ void receive_messages()
 		else
 		{
 			payload = packet.payload;
-		}
-
-		if (payload == "PING")
-		{
-			const char* pong_msg = "PONG";
-			messageManager.SendRawMessage(socket_in, pong_msg);
-			continue;
 		}
 
 		std::cout << "\rServer: " << payload << "\n";
@@ -153,10 +174,12 @@ int main(int argc, const char** argv)
 	messageManager.SetSocket(sfd);
 	memcpy(&serverAddr, addr_info.ai_addr, sizeof(sockaddr_in));
 
-	const char* readyMsg = "READY";
-	messageManager.SendRawMessage(serverAddr, readyMsg);
+	std::cout << "ChatClient - Type '/quit' to exit\n";
 
-	std::cout << "ChatClient - Type '/quit' to exit\n"
+	const char* readyMsg = "READY";
+	messageManager.SendReliable(serverAddr, readyMsg);
+
+	std::cout << "Trying to connect server\n"
 			  << "> ";
 
 	std::thread receiver(receive_messages);
