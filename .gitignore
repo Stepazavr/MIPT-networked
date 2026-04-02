@@ -61,3 +61,76 @@
 
 # Allow clang-format.exe
 !util/clang-format.exe
+
+
+build/
+
+
+# Unity project ignore rules (for deep nested project)
+
+# Unity specific 
+**/[Ll]ibrary/
+**/[Tt]emp/
+**/[Oo]bj/
+**/[Ll]ogs/
+
+# Visual Studio / IDE files 
+**/*.csproj
+**/*.unityproj
+**/*.sln
+**/*.suo
+**/*.user
+**/*.userprefs
+**/*.pidb
+**/*.booproj
+**/*.swp
+**/*.slnf
+**/*.vcxproj
+**/*.vcxproj.filters
+**/*.vcxproj.user
+**/.vs/
+**/.vscode/
+**/.idea/
+
+# Unity auto-generated
+**/Assembly-CSharp*
+**/*.Player.csproj
+**/*.Editor.csproj
+
+# Asset cache (anywhere)
+**/Assets/AssetImportTemp/
+**/Assets/Temp/
+
+# Build folders (anywhere)
+**/[Bb]uild/
+**/[Bb]uilds/
+**/[Ee]xports/
+**/[Dd]ownloads/
+
+# User settings (anywhere)
+**/[Uu]ser[Ss]ettings/
+
+# Burst output (anywhere)
+**/[Bb]urst[Oo]utput/
+
+# Package Manager
+**/Packages/packages-lock.json
+
+# OS metadata (anywhere)
+**/.DS_Store
+**/Thumbs.db
+**/Desktop.ini
+**/._*
+
+# Temporary files (anywhere)
+**/*.tmp
+**/*.bak
+**/*.cache
+**/*.log
+**/*~
+
+
+**/*.vsconfig
+**/*AGENTS.md
+**/*.sln
+**/*.csproj
