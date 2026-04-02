@@ -130,7 +130,7 @@ build/
 **/*~
 
 
-**/*.vsconfig
-**/*AGENTS.md
+**/.vsconfig
+**/AGENTS.md
 **/*.sln
 **/*.csproj
